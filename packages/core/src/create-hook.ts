@@ -88,6 +88,11 @@ export interface HookOptions {
    * with information that the dispatching side can reliably reconstruct
    * the token with the information it has available.
    *
+   * Deterministic tokens are intended for use with `createHook()` and
+   * server-side `resumeHook()` only. For webhooks (`createWebhook()`),
+   * tokens are always randomly generated to prevent unauthorized access
+   * to the public webhook endpoint.
+   *
    * If not provided, a randomly generated token will be assigned.
    *
    * @example
@@ -118,7 +123,7 @@ export interface HookOptions {
   metadata?: Serializable;
 }
 
-export interface WebhookOptions extends HookOptions {
+export interface WebhookOptions extends Omit<HookOptions, 'token'> {
   /**
    * If set to a `Response` object, the webhook will automatically
    * respond with the specified response.

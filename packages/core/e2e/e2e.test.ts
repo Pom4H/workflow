@@ -465,19 +465,19 @@ describe('e2e', () => {
   });
 
   test('webhookWorkflow', { timeout: 60_000 }, async () => {
-    const token = Math.random().toString(36).slice(2);
-    const token2 = Math.random().toString(36).slice(2);
-    const token3 = Math.random().toString(36).slice(2);
-
-    const run = await start(await e2e('webhookWorkflow'), [
-      token,
-      token2,
-      token3,
-    ]);
+    const run = await start(await e2e('webhookWorkflow'), []);
 
     // Wait a few seconds so that the webhooks are registered.
     // TODO: make this more efficient when we add subscription support.
     await new Promise((resolve) => setTimeout(resolve, 5_000));
+
+    // Discover the randomly generated webhook tokens via hooks.list
+    const world = getWorld();
+    const { data: hooks } = await world.hooks.list({ runId: run.runId });
+    expect(hooks).toHaveLength(3);
+
+    // Hooks are returned in creation order; extract tokens
+    const [token, token2, token3] = hooks.map((h) => h.token);
 
     // Webhook with default response
     const res = await fetch(

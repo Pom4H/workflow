@@ -9,6 +9,7 @@ import type { WorkflowOrchestratorContext } from '../private.js';
 import { dehydrateStepReturnValue } from '../serialization.js';
 import { createContext } from '../vm/index.js';
 import { createCreateHook } from './hook.js';
+import { createWebhook } from './create-hook.js';
 
 // Helper to setup context to simulate a workflow run
 function setupWorkflowContext(events: Event[]): WorkflowOrchestratorContext {
@@ -842,5 +843,13 @@ describe('createCreateHook', () => {
       expect(workflowError.hookDisposedCount).toBe(1);
       expect(workflowError.hookCount).toBe(0);
     }
+  });
+});
+
+describe('createWebhook', () => {
+  it('should throw when a token option is passed', () => {
+    expect(() => (createWebhook as any)({ token: 'anything' })).toThrow(
+      '`createWebhook()` does not accept a `token` option. Webhook tokens are always randomly generated. Use `createHook()` with `resumeHook()` for deterministic token patterns.'
+    );
   });
 });
