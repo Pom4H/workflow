@@ -251,11 +251,7 @@ const stepHandler = getWorldHandlers().createQueueHandler(
             // Too early: retryAfter timestamp not reached yet
             // Return timeout to queue so it retries later
             if (TooEarlyError.is(err)) {
-              const retryAfter = err.retryAfter ?? new Date(Date.now() + 1000);
-              const timeoutSeconds = Math.max(
-                1,
-                Math.ceil((retryAfter.getTime() - Date.now()) / 1000)
-              );
+              const timeoutSeconds = Math.max(1, err.retryAfter ?? 1);
               span?.setAttributes({
                 ...Attribute.StepRetryTimeoutSeconds(timeoutSeconds),
               });
@@ -263,12 +259,11 @@ const stepHandler = getWorldHandlers().createQueueHandler(
               span?.addEvent?.('step.delayed', {
                 'delay.reason': 'retry_after_not_reached',
                 'delay.timeout_seconds': timeoutSeconds,
-                'delay.retry_after': retryAfter.toISOString(),
               });
               runtimeLogger.debug('Step retryAfter timestamp not yet reached', {
                 stepName,
                 stepId,
-                retryAfter,
+                retryAfterSeconds: err.retryAfter,
                 timeoutSeconds,
               });
               return { timeoutSeconds };
