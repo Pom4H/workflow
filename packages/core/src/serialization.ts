@@ -522,7 +522,7 @@ export class WorkflowServerWritableStream extends WritableStream<Uint8Array> {
             for (const w of currentWaiters) w.reject(err);
           }
         );
-      }, STREAM_FLUSH_INTERVAL_MS);
+      }, world.streamFlushIntervalMs ?? STREAM_FLUSH_INTERVAL_MS);
     };
 
     super({
