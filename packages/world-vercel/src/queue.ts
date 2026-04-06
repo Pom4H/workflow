@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { Transport } from '@vercel/queue';
 import { DuplicateMessageError, QueueClient } from '@vercel/queue';
 import {
   MessageId,
@@ -8,9 +9,34 @@ import {
   QueuePayloadSchema,
   ValidQueueName,
 } from '@workflow/world';
+import { decode, encode } from 'cbor-x';
 import { z } from 'zod/v4';
 import { getDispatcher } from './http-client.js';
 import { type APIConfig, getHeaders, getHttpUrl } from './utils.js';
+
+/**
+ * CBOR-based queue transport. Encodes values with cbor-x on send and
+ * decodes on receive, preserving Uint8Array values natively (workflow
+ * input is a Uint8Array in specVersion >= 2).
+ */
+class CborTransport implements Transport<unknown> {
+  readonly contentType = 'application/cbor';
+
+  serialize(value: unknown): Buffer {
+    return Buffer.from(encode(value));
+  }
+
+  async deserialize(stream: ReadableStream<Uint8Array>): Promise<unknown> {
+    const chunks: Uint8Array[] = [];
+    const reader = stream.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    return decode(Buffer.concat(chunks));
+  }
+}
 
 const requestIdStorage = new AsyncLocalStorage<string | undefined>();
 
@@ -86,9 +112,12 @@ export function createQueue(config?: APIConfig): Queue {
 
   const region = 'iad1';
 
+  const cborTransport = new CborTransport();
+
   const clientOptions = {
     region,
     dispatcher: getDispatcher(),
+    transport: cborTransport,
     ...(usingProxy && {
       // final path will be /queues-proxy/api/v3/topic/...
       // and the proxy will strip the /queues-proxy prefix before forwarding to VQS
@@ -118,27 +147,17 @@ export function createQueue(config?: APIConfig): Queue {
       deploymentId,
     });
 
-    // zod v3 doesn't have the `encode` method. We only support zod v4 officially,
-    // but codebases that pin zod v3 are still common.
-    const hasEncoder = typeof MessageWrapper.encode === 'function';
-    if (!hasEncoder) {
-      console.warn(
-        'Using zod v3 compatibility mode for queue() calls - this may not work as expected'
-      );
-    }
-    const encoder = hasEncoder
-      ? MessageWrapper.encode
-      : (data: z.infer<typeof MessageWrapper>) => data;
-
-    const encoded = encoder({
+    // The CborTransport handles CBOR encoding inside serialize(),
+    // preserving Uint8Array values (workflow input in specVersion >= 2).
+    const wrapper = {
       payload,
       queueName,
       // Store deploymentId in the message so it can be preserved when re-enqueueing
       deploymentId: opts?.deploymentId,
-    });
+    };
     const sanitizedQueueName = queueName.replace(/[^A-Za-z0-9-_]/g, '-');
     try {
-      const { messageId } = await client.send(sanitizedQueueName, encoded, {
+      const { messageId } = await client.send(sanitizedQueueName, wrapper, {
         idempotencyKey: opts?.idempotencyKey,
         delaySeconds: opts?.delaySeconds,
         headers: {
@@ -179,6 +198,8 @@ export function createQueue(config?: APIConfig): Queue {
         }
 
         const requestId = requestIdStorage.getStore();
+        // The CborTransport handles CBOR decoding inside deserialize(),
+        // so message is already a plain object with Uint8Array values intact.
         const { payload, queueName, deploymentId } =
           MessageWrapper.parse(message);
 
