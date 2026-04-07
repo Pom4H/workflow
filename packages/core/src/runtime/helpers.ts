@@ -4,7 +4,7 @@ import type {
   ValidQueueName,
   World,
 } from '@workflow/world';
-import { HealthCheckPayloadSchema } from '@workflow/world';
+import { HealthCheckPayloadSchema, SPEC_VERSION_CURRENT } from '@workflow/world';
 import { monotonicFactory } from 'ulid';
 
 import { runtimeLogger } from '../logger.js';
@@ -54,6 +54,8 @@ export interface HealthCheckResult {
   error?: string;
   /** Latency if the health check was successful */
   latencyMs?: number;
+  /** Spec version of the responding deployment */
+  specVersion?: number;
 }
 
 /**
@@ -96,6 +98,7 @@ export async function handleHealthCheckMessage(
     healthy: true,
     endpoint,
     correlationId: healthCheck.correlationId,
+    specVersion: SPEC_VERSION_CURRENT,
     timestamp: Date.now(),
   });
   // Use a fake runId that passes validation.
@@ -195,7 +198,14 @@ function parseHealthCheckResponse(
     return null;
   }
 
-  return { healthy: (response as { healthy: boolean }).healthy };
+  const r = response as Record<string, unknown>;
+  const parsed: { healthy: boolean; specVersion?: number } = {
+    healthy: r.healthy as boolean,
+  };
+  if (typeof r.specVersion === 'number') {
+    parsed.specVersion = r.specVersion;
+  }
+  return parsed;
 }
 
 export async function healthCheck(
@@ -361,11 +371,15 @@ export function withHealthCheck(
         });
       }
       return new Response(
-        `Workflow SDK "${url.pathname}" endpoint is healthy`,
+        JSON.stringify({
+          healthy: true,
+          endpoint: url.pathname,
+          specVersion: SPEC_VERSION_CURRENT,
+        }),
         {
           status: 200,
           headers: {
-            'Content-Type': 'text/plain',
+            'Content-Type': 'application/json',
             ...HEALTH_CHECK_CORS_HEADERS,
           },
         }
