@@ -2309,6 +2309,7 @@ impl StepTransform {
                                         step_id,
                                     ));
                                 }
+                                TransformMode::Detect => {}
                             }
                         }
                     }
@@ -8397,6 +8398,7 @@ impl VisitMut for StepTransform {
                         method.visit_mut_children_with(self);
                         self.current_parent_function_name = old_parent;
                     }
+                    TransformMode::Detect => {}
                 }
             } else {
                 method.visit_mut_children_with(self);
