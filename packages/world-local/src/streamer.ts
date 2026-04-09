@@ -375,10 +375,7 @@ export function createStreamer(basedir: string, tag?: string): Streamer {
         };
       },
 
-      async getInfo(
-        _runId: string,
-        name: string
-      ): Promise<StreamInfoResponse> {
+      async getInfo(_runId: string, name: string): Promise<StreamInfoResponse> {
         const chunksDir = path.join(basedir, 'streams', 'chunks');
         const { files: chunkFiles, extMap: fileExtMap } =
           await listChunkFilesForStream(chunksDir, name, tag);

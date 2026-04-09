@@ -12,7 +12,10 @@ describe('WorkflowServerWritableStream', () => {
     writeMulti: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   };
-  let mockWorld: { streams: typeof mockStreams; streamFlushIntervalMs?: number };
+  let mockWorld: {
+    streams: typeof mockStreams;
+    streamFlushIntervalMs?: number;
+  };
 
   beforeEach(async () => {
     mockStreams = {

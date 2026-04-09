@@ -325,10 +325,7 @@ export function createStreamer(pool: Pool, drizzle: Drizzle): PostgresStreamer {
         };
       },
 
-      async getInfo(
-        _runId: string,
-        name: string
-      ): Promise<StreamInfoResponse> {
+      async getInfo(_runId: string, name: string): Promise<StreamInfoResponse> {
         // Use COUNT(*) instead of fetching all rows into memory
         const [countResult] = await drizzle
           .select({ count: sql<number>`count(*)` })

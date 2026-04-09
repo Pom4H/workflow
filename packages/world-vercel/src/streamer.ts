@@ -227,10 +227,7 @@ export function createStreamer(config?: APIConfig): Streamer {
         });
       },
 
-      async getInfo(
-        runId: string,
-        name: string
-      ): Promise<StreamInfoResponse> {
+      async getInfo(runId: string, name: string): Promise<StreamInfoResponse> {
         const endpoint = `/v2/runs/${encodeURIComponent(runId)}/streams/${encodeURIComponent(name)}/info`;
         return makeRequest({
           endpoint,

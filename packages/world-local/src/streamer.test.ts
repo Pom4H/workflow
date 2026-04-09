@@ -795,9 +795,13 @@ describe('streamer', () => {
         await streamer.streams.close(TEST_RUN_ID, streamName);
 
         // Page 1: limit=2
-        const page1 = await streamer.streams.getChunks(TEST_RUN_ID, streamName, {
-          limit: 2,
-        });
+        const page1 = await streamer.streams.getChunks(
+          TEST_RUN_ID,
+          streamName,
+          {
+            limit: 2,
+          }
+        );
         expect(page1.data).toHaveLength(2);
         expect(page1.data[0].index).toBe(0);
         expect(page1.data[1].index).toBe(1);
@@ -805,10 +809,14 @@ describe('streamer', () => {
         expect(page1.cursor).not.toBeNull();
 
         // Page 2: remaining chunks
-        const page2 = await streamer.streams.getChunks(TEST_RUN_ID, streamName, {
-          limit: 2,
-          cursor: page1.cursor!,
-        });
+        const page2 = await streamer.streams.getChunks(
+          TEST_RUN_ID,
+          streamName,
+          {
+            limit: 2,
+            cursor: page1.cursor!,
+          }
+        );
         expect(page2.data).toHaveLength(1);
         expect(page2.data[0].index).toBe(2);
         expect(page2.hasMore).toBe(false);
@@ -821,7 +829,10 @@ describe('streamer', () => {
 
         await streamer.streams.write(TEST_RUN_ID, streamName, 'data');
 
-        const result = await streamer.streams.getChunks(TEST_RUN_ID, streamName);
+        const result = await streamer.streams.getChunks(
+          TEST_RUN_ID,
+          streamName
+        );
         expect(result.data).toHaveLength(1);
         expect(result.done).toBe(false);
       });
@@ -845,9 +856,13 @@ describe('streamer', () => {
         await streamer.streams.close(TEST_RUN_ID, streamName);
 
         // Invalid cursor should reset to beginning
-        const result = await streamer.streams.getChunks(TEST_RUN_ID, streamName, {
-          cursor: 'not-valid-base64-json',
-        });
+        const result = await streamer.streams.getChunks(
+          TEST_RUN_ID,
+          streamName,
+          {
+            cursor: 'not-valid-base64-json',
+          }
+        );
         expect(result.data).toHaveLength(1);
         expect(result.data[0].index).toBe(0);
       });
