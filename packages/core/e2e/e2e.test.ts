@@ -1553,6 +1553,40 @@ describe('e2e', () => {
     }
   );
 
+  test(
+    'startFromWorkflow - calling start() directly inside a workflow function with hook communication',
+    { timeout: 120_000 },
+    async () => {
+      const inputValue = 42;
+      const run = await start(await e2e('startFromWorkflow'), [inputValue]);
+      trackRun(run);
+      const returnValue = await run.returnValue;
+
+      expect(returnValue.parentInput).toBe(inputValue);
+      expect(typeof returnValue.childRunId).toBe('string');
+      expect(returnValue.childRunId.startsWith('wrun_')).toBe(true);
+      expect(returnValue.signalFromChild.processed).toBe(inputValue * 3);
+
+      // Verify child workflow also completed independently
+      const childRun = getRun(returnValue.childRunId);
+      trackRun(childRun);
+      const childResult = await childRun.returnValue;
+      expect(childResult.processed).toBe(inputValue * 3);
+    }
+  );
+
+  test(
+    'fibonacciWorkflow - recursive workflow composition via start()',
+    { timeout: 180_000 },
+    async () => {
+      // fib(6) = 8, spawns a tree of child workflow runs
+      const run = await start(await e2e('fibonacciWorkflow'), [6]);
+      trackRun(run);
+      const returnValue = await run.returnValue;
+      expect(returnValue).toBe(8);
+    }
+  );
+
   // This test requires direct HTTP access and works when running locally.
   // For production use on Vercel with Deployment Protection enabled, use the
   // queue-based `healthCheck(world, endpoint, options)` function instead, which
