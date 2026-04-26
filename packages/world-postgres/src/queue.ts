@@ -256,10 +256,9 @@ export function createQueue(
       `${baseUrl}/.well-known/workflow/v1/${pathname}`,
       {
         method: 'POST',
-        duplex: 'half',
         headers,
         body,
-      } as any
+      }
     );
     const text = await response.text();
 
