@@ -54,7 +54,7 @@ export function createWorld(
   const drizzle = createClient(pool);
   const queue = createQueue(config, pool);
   const storage = createStorage(drizzle);
-  const streamer = createStreamer(pool, drizzle);
+  const streamer = createStreamer(pool, drizzle, config.listenAdapter);
 
   return {
     specVersion: SPEC_VERSION_CURRENT,
@@ -80,4 +80,10 @@ export function createWorld(
 
 // Re-export schema for users who want to extend or inspect the database schema
 export type { PostgresWorldConfig } from './config.js';
+export {
+  createBunSqlListenAdapter,
+  createPgListenAdapter,
+  type ListenAdapter,
+  type ListenSubscription,
+} from './listen-adapter.js';
 export * from './drizzle/schema.js';

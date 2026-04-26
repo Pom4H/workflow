@@ -6,10 +6,15 @@ import type {
   StreamInfoResponse,
 } from '@workflow/world';
 import { and, asc, eq, gt, sql } from 'drizzle-orm';
-import { Client, type Pool } from 'pg';
+import type { Pool } from 'pg';
 import { monotonicFactory } from 'ulid';
 import * as z from 'zod';
 import { type Drizzle, Schema } from './drizzle/index.js';
+import {
+  createPgListenAdapter,
+  type ListenAdapter,
+  type ListenSubscription,
+} from './listen-adapter.js';
 import { Mutex } from './util.js';
 
 const StreamPublishMessage = z.object({
@@ -44,128 +49,35 @@ class Rc<T extends { drop(): void }> {
 }
 
 /**
- * Subscribe to a PostgreSQL NOTIFY channel using a dedicated client created
- * from the pool's connection options. `channel` must be a trusted identifier.
+ * Subscribe to a PostgreSQL NOTIFY channel.
  *
- * The dedicated `Client` is long-lived and will eventually be dropped by the
- * server (idle TCP timeout, pgbouncer rotation, k8s CNI eviction). The
- * unpatched implementation does not reconnect, so a process running for more
- * than a few hours stops receiving notifications and only a restart restores
- * delivery (cf. brianc/node-postgres#967, where the pg maintainers say the
- * consumer must reconnect on `error`/`end`).
+ * Backwards-compatible thin wrapper around {@link createPgListenAdapter} —
+ * preserved as a named export because earlier versions of this package
+ * exposed it directly. New code should construct a {@link ListenAdapter}
+ * once (via `createPgListenAdapter` or a future `createBunSqlListenAdapter`)
+ * and pass it to {@link createStreamer}, which lets the streamer share a
+ * single dedicated subscriber across all stream consumers.
  *
- * This implementation wraps `Client` in a reconnect loop with exponential
- * backoff (250 ms → 30 s cap). The initial connect must succeed (callers
- * expect a live subscription before the promise resolves); subsequent
- * reconnects are best-effort. Notifications fired while the dedicated client
- * is reconnecting are lost on the wire — the polling fallback in
- * `readFromStream` picks them up from the database on its periodic tick, so
- * end-to-end stream delivery stays correct.
+ * `channel` must be a trusted identifier (it is interpolated into the
+ * `LISTEN` SQL — `pg` does not parameterise identifiers).
  */
-export const listenChannel = async (
+export const listenChannel = (
   pool: Pool,
   channel: string,
   onPayload: (payload: string) => Promise<void>
-): Promise<{ close: () => Promise<void> }> => {
-  let client: Client | null = null;
-  let closed = false;
-  let reconnectAttempt = 0;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const onNotification = (msg: { payload?: string | undefined }) => {
-    onPayload(msg.payload ?? '').catch(() => {});
-  };
-
-  const detach = (c: Client | null) => {
-    if (!c) return;
-    try {
-      c.removeListener('notification', onNotification);
-    } catch {
-      // listener may already be detached
-    }
-    c.end().catch(() => {});
-  };
-
-  const scheduleReconnect = () => {
-    if (closed || reconnectTimer) return;
-    const delay = Math.min(30_000, 250 * 2 ** reconnectAttempt);
-    reconnectAttempt++;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (closed) return;
-      connect().catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn(
-          '[world-postgres listenChannel] reconnect failed',
-          (err as Error)?.message ?? err
-        );
-        scheduleReconnect();
-      });
-    }, delay);
-  };
-
-  const connect = async () => {
-    if (closed) return;
-    const next = new Client(pool.options);
-    next.on('error', (err) => {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[world-postgres listenChannel] client error',
-        (err as Error)?.message ?? err
-      );
-      if (client === next) client = null;
-      detach(next);
-      scheduleReconnect();
-    });
-    next.on('end', () => {
-      if (closed) return;
-      if (client === next) client = null;
-      scheduleReconnect();
-    });
-    try {
-      await next.connect();
-      await next.query(`LISTEN ${channel}`);
-    } catch (err) {
-      await next.end().catch(() => {});
-      throw err;
-    }
-    next.on('notification', onNotification);
-    client = next;
-    reconnectAttempt = 0;
-  };
-
-  await connect();
-
-  return {
-    close: async () => {
-      closed = true;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      const c = client;
-      client = null;
-      if (!c) return;
-      try {
-        c.removeListener('notification', onNotification);
-      } catch {
-        // listener may already be detached
-      }
-      try {
-        await c.query(`UNLISTEN ${channel}`);
-      } finally {
-        await c.end().catch(() => {});
-      }
-    },
-  };
-};
+): Promise<ListenSubscription> =>
+  createPgListenAdapter(pool).listen(channel, onPayload);
 
 export type PostgresStreamer = Streamer & {
   /** Unlisten from the LISTEN subscription and release resources. */
   close(): Promise<void>;
 };
 
-export function createStreamer(pool: Pool, drizzle: Drizzle): PostgresStreamer {
+export function createStreamer(
+  pool: Pool,
+  drizzle: Drizzle,
+  listenAdapter: ListenAdapter = createPgListenAdapter(pool)
+): PostgresStreamer {
   const ulid = monotonicFactory();
   const events = new EventEmitter<{
     [key: `strm:${string}`]: [StreamChunkEvent];
@@ -187,7 +99,7 @@ export function createStreamer(pool: Pool, drizzle: Drizzle): PostgresStreamer {
 
   const STREAM_TOPIC = 'workflow_event_chunk';
 
-  const listenSubscription = listenChannel(pool, STREAM_TOPIC, async (msg) => {
+  const listenSubscription = listenAdapter.listen(STREAM_TOPIC, async (msg) => {
     const parsed = StreamPublishMessage.parse(JSON.parse(msg));
 
     const key = `strm:${parsed.streamId}` as const;
@@ -213,9 +125,8 @@ export function createStreamer(pool: Pool, drizzle: Drizzle): PostgresStreamer {
     });
   });
 
-  const notifyStream = async (payload: string) => {
-    await pool.query('SELECT pg_notify($1, $2)', [STREAM_TOPIC, payload]);
-  };
+  const notifyStream = (payload: string) =>
+    listenAdapter.notify(STREAM_TOPIC, payload);
 
   // Helper to convert chunk to Buffer
   const toBuffer = (chunk: string | Uint8Array): Buffer =>
