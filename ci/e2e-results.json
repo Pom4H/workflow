@@ -1,0 +1,23 @@
+{
+  "lastUpdated": "2026-04-27T15:10:59.002Z",
+  "commit": "56ba32feb848cd99a01f113116ec4e00f8f10187",
+  "branch": "main",
+  "type": "e2e",
+  "worlds": {
+    "local": {
+      "status": "passing",
+      "total": 95,
+      "passed": 95,
+      "failed": 0,
+      "skipped": 0,
+      "frameworks": {
+        "nextjs-turbopack": {
+          "total": 95,
+          "passed": 95,
+          "failed": 0
+        }
+      },
+      "progress": 100
+    }
+  }
+}
