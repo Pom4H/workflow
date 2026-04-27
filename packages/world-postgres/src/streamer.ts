@@ -474,6 +474,13 @@ export function createStreamer(
                 return;
               }
 
+              // Advance the high-water mark before any early return. The
+              // polling fallback re-queries `chunk_id > lastChunkId` and
+              // would otherwise re-enqueue chunks we intentionally skipped
+              // for `startIndex`, double-decrementing `offset` and
+              // eventually mis-delivering them.
+              lastChunkId = msg.id;
+
               if (offset > 0) {
                 offset--;
                 return;
@@ -486,7 +493,6 @@ export function createStreamer(
                 closed = true;
                 controller.close();
               }
-              lastChunkId = msg.id;
             }
 
             function onData(data: StreamChunkEvent) {

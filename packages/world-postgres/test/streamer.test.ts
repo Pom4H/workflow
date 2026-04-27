@@ -189,6 +189,58 @@ describe('Streamer (Postgres integration)', () => {
     }
   }, 20_000);
 
+  it('startIndex skip is idempotent across polling ticks', async () => {
+    // Regression test: with polling enabled, `streams.get` re-queries
+    // `chunk_id > lastChunkId` every tick. If `enqueue` skipped a chunk for
+    // `startIndex` without advancing `lastChunkId`, the same chunk would
+    // come back on the next poll and be skipped again — eventually
+    // exhausting `offset` against the same physical chunks and delivering
+    // them anyway.
+    const streamer = createStreamer(pool, drizzle, { pollIntervalMs: 100 });
+    try {
+      const streamName = 'stream-startindex-poll';
+
+      // Pre-populate two chunks. With startIndex=2 they must be skipped.
+      const idA = `chnk_${ulid()}`;
+      const idB = `chnk_${ulid()}`;
+      await pool.query(
+        `INSERT INTO workflow.workflow_stream_chunks (id, stream_id, run_id, data, eof)
+         VALUES ($1, $2, $3, $4, false), ($5, $2, $3, $6, false)`,
+        [
+          idA,
+          streamName,
+          'run-3',
+          Buffer.from([0xaa]),
+          idB,
+          Buffer.from([0xbb]),
+        ]
+      );
+
+      const stream = await streamer.streams.get('run-3', streamName, 2);
+      const reader = stream.getReader();
+
+      // Let several poll ticks run with only the two skip-chunks in DB. If
+      // the bug regresses, polling will eventually deliver one of them.
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Append a third chunk — this is the one the reader should receive.
+      const idC = `chnk_${ulid()}`;
+      await pool.query(
+        `INSERT INTO workflow.workflow_stream_chunks (id, stream_id, run_id, data, eof)
+         VALUES ($1, $2, $3, $4, false)`,
+        [idC, streamName, 'run-3', Buffer.from([0xcc])]
+      );
+
+      const next = await readNext(reader, 3_000);
+      expect(next.done).toBe(false);
+      expect(Array.from(next.value ?? [])).toEqual([0xcc]);
+
+      reader.releaseLock();
+    } finally {
+      await streamer.close();
+    }
+  }, 15_000);
+
   it('listenChannel reconnects after its backend is terminated', async () => {
     // Low-level test for listenChannel itself: terminate its dedicated
     // backend, wait past the initial 250ms backoff, then fire a NOTIFY.
