@@ -128,6 +128,14 @@ export const listenChannel = async (
       await next.end().catch(() => {});
       throw err;
     }
+    // `close()` may have been called while we were awaiting connect/LISTEN.
+    // Without this guard the freshly-connected client would attach a
+    // notification listener and survive past `close()` — a slow reconnect
+    // could outlive the subscription it's meant to back.
+    if (closed) {
+      await next.end().catch(() => {});
+      return;
+    }
     next.on('notification', onNotification);
     client = next;
     reconnectAttempt = 0;
@@ -463,6 +471,29 @@ export function createStreamer(
             let buffer = [] as StreamChunkEvent[] | null;
             let polling = false;
             let closed = false;
+            let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+            function onData(data: StreamChunkEvent) {
+              if (buffer) {
+                buffer.push(data);
+                return;
+              }
+              enqueue(data);
+            }
+
+            // Idempotent teardown for the reader: detach the EventEmitter
+            // listener and clear the polling timer. Called both from
+            // `cancel()` (consumer aborts) and from `enqueue` on EOF
+            // (natural completion) so the polling timer doesn't keep
+            // ticking indefinitely after the controller has closed.
+            const stop = () => {
+              closed = true;
+              if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+              }
+              events.off(`strm:${name}`, onData);
+            };
 
             function enqueue(msg: {
               id: string;
@@ -490,22 +521,13 @@ export function createStreamer(
                 controller.enqueue(new Uint8Array(msg.data));
               }
               if (msg.eof) {
-                closed = true;
                 controller.close();
+                stop();
               }
             }
 
-            function onData(data: StreamChunkEvent) {
-              if (buffer) {
-                buffer.push(data);
-                return;
-              }
-              enqueue(data);
-            }
             events.on(`strm:${name}`, onData);
-            cleanups.push(() => {
-              events.off(`strm:${name}`, onData);
-            });
+            cleanups.push(stop);
 
             const chunks = await drizzle
               .select({
@@ -537,9 +559,9 @@ export function createStreamer(
             // reconnecting. A light periodic re-query of chunks past
             // `lastChunkId` is the always-on safety net: every
             // `pollIntervalMs` it pulls any chunks the EventEmitter missed,
-            // deduped by the `enqueue` ordering check. Stops on EOF (enqueue
-            // sets `closed`), on cancel, or on pool error (try/catch keeps
-            // the timer alive for a future tick).
+            // deduped by the `enqueue` ordering check. The timer is cleared
+            // by `stop()` on EOF or cancel; transient query failures are
+            // logged so the next tick can retry.
             const runPoll = async () => {
               const fresh = await drizzle
                 .select({
@@ -577,12 +599,11 @@ export function createStreamer(
               }
             };
 
-            const pollTimer =
-              pollIntervalMs > 0 ? setInterval(tick, pollIntervalMs) : null;
-            cleanups.push(() => {
-              closed = true;
-              if (pollTimer) clearInterval(pollTimer);
-            });
+            // Initial chunks may have already delivered EOF; in that case
+            // `stop()` cleared the flag and we don't start polling at all.
+            if (!closed && pollIntervalMs > 0) {
+              pollTimer = setInterval(tick, pollIntervalMs);
+            }
           },
           cancel() {
             cleanups.forEach((fn) => void fn());

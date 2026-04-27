@@ -10,6 +10,7 @@ import {
   expect,
   it,
   test,
+  vi,
 } from 'vitest';
 import { createClient, type Drizzle } from '../src/drizzle/index.js';
 import { createStreamer, listenChannel } from '../src/streamer.js';
@@ -240,6 +241,59 @@ describe('Streamer (Postgres integration)', () => {
       await streamer.close();
     }
   }, 15_000);
+
+  it('clears polling timer on natural EOF (no resource leak)', async () => {
+    // The polling fallback registers a `setInterval`. Without explicit
+    // teardown on EOF, the timer keeps ticking forever once the consumer
+    // has finished reading — a slow drift that holds the event loop alive
+    // and accumulates per long-running stream. This test pins down the
+    // contract: after `done: true`, every `setInterval` we created must
+    // have been cleared.
+    const setSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval');
+    const POLL_MS = 73;
+
+    const streamer = createStreamer(pool, drizzle, { pollIntervalMs: POLL_MS });
+    try {
+      const streamName = 'stream-eof-cleanup';
+      const stream = await streamer.streams.get('run-eof', streamName);
+      const reader = stream.getReader();
+
+      await streamer.streams.write(
+        'run-eof',
+        streamName,
+        new Uint8Array([1, 2])
+      );
+      await streamer.streams.close('run-eof', streamName);
+
+      const first = await readNext(reader, 3_000);
+      expect(first.done).toBe(false);
+
+      const final = await readNext(reader, 3_000);
+      expect(final.done).toBe(true);
+
+      // Find every interval the streamer scheduled at our test poll cadence
+      // (filter by delay so any unrelated intervals from other libs don't
+      // pollute the assertion). Each one must appear in clearInterval
+      // calls. We do NOT call reader.cancel() — the point of this test is
+      // that EOF alone is enough to release resources.
+      const ourIntervalIds = setSpy.mock.results
+        .filter((_, i) => setSpy.mock.calls[i][1] === POLL_MS)
+        .map((r) => r.value);
+      expect(ourIntervalIds.length).toBeGreaterThan(0);
+
+      const clearedIds = new Set(clearSpy.mock.calls.map((c) => c[0]));
+      for (const id of ourIntervalIds) {
+        expect(clearedIds.has(id)).toBe(true);
+      }
+
+      reader.releaseLock();
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+      await streamer.close();
+    }
+  }, 10_000);
 
   it('listenChannel reconnects after its backend is terminated', async () => {
     // Low-level test for listenChannel itself: terminate its dedicated
